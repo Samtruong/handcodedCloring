@@ -35,6 +35,13 @@ class CSR
 {
 public:
   CSR(const char *);
+  ~CSR() {
+    cudaFree(csr);
+    cudaFree(offset);
+    cudaFree(colors);
+    cudaFree(rand);
+    delete [] adj_matrix;
+  };
   SizeT &operator[] (SizeT);
   void print_adj();
   void print_arrays();
@@ -106,7 +113,7 @@ CSR<ValueT,SizeT>::CSR(const char filename[]) {
       }
     }
   }
-  thrust::inclusive_scan(thrust::host, this->offset,
+  thrust::exclusive_scan(thrust::host, this->offset,
     this->offset + this->vertices, this->offset);
 
   // create rand array for IS
@@ -114,6 +121,7 @@ CSR<ValueT,SizeT>::CSR(const char filename[]) {
   // this->rand = new ValueT[this->vertices];
   random_device rd;
   mt19937 e2(rd());
+  e2.seed(1);
   uniform_real_distribution<> dist(0,100);
   for (int v = 0; v < this->vertices; v++) {
     this->rand[v] = dist(e2);
@@ -139,7 +147,7 @@ void CSR<ValueT, SizeT>::print_adj() {
   if(this->vertices < 20)
     max_idx = this->vertices;
   for (int i = 0; i < max_idx; i++) {
-    cout << "[";
+    cout << i << " : [";
     for (int j = 0; j < max_idx; j++) {
       cout << this->adj_matrix[i * this->vertices + j] << ", ";
     }
@@ -190,14 +198,14 @@ void CSR<ValueT, SizeT>::check_conflict() {
       SizeT u = csr[e];
       if ((this->colors[v] == this->colors[u]) && (u != v)) {
         cout << "ERROR: Conflict at node " << v << "and node " << u
-        << "at color" << colors[v] << endl;
+        << " at color" << colors[v] << endl;
       }
     }
   }
 }
 
 /*==============================================================================
-IS color operation
+IS color operation - outline taken from Gunrock jpl_color_op
 ==============================================================================*/
 template <typename ValueT, typename SizeT>
 #if defined(VERSION) && VERSION == 1
@@ -280,18 +288,19 @@ IS Kernel Driver
 // }
 
 /*==============================================================================
-Main function
+Tester - version 1
 ==============================================================================*/
+template <typename ValueT, typename SizeT>
+void test_1(bool small) {
 
-int main(int argc, char const *argv[]) {
-  // char input[100];
-  // cout << "Enter file name: ";
-  // cin.get(input,100);
-  CSR <float, int> graph = CSR<float, int>("../gunrock/dataset/small/test_cc.mtx");
-#if defined(VERSION) && VERSION == 1
+  CSR <float, int>  graph = CSR<float, int>("/data-2/topc-datasets/gc-data/offshore/offshore.mtx");
+  if (small) {
+    CSR <float, int> graph = CSR<float, int>("../gunrock/dataset/small/test_cc.mtx"); }
+
   int iteration = 0;
   unsigned int num_threads = 32;
   unsigned int num_blocks = graph.vertices / num_threads + 1;
+
   while (stop_condition<float, int>(graph.colors, graph.vertices)) {
       color_op<float, int><<<num_blocks, num_threads>>>
       (graph.csr,
@@ -303,10 +312,24 @@ int main(int argc, char const *argv[]) {
        cudaDeviceSynchronize();
        iteration ++;
   }
-#endif
 
+  graph.print_adj();
   graph.print_arrays();
   graph.check_conflict();
+};
+
+/*==============================================================================
+Main function
+==============================================================================*/
+
+int main(int argc, char const *argv[]) {
+#if defined(VERSION) && VERSION == 1
+  cout << "Test small graph" << endl;
+  test_1 <float, int> (true);
+
+  cout << "Test large graph" << endl;
+  test_1 <float, int> (false);
+#endif
   return 0;
 }
 
