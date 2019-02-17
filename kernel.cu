@@ -1,5 +1,5 @@
 #define VERSION 1
-
+#define SEED_NUM 123
 /*
 Common cpp libraries
 */
@@ -12,6 +12,7 @@ Common cpp libraries
 #include <iostream>
 #include <cstring>
 #include <random>
+#include <bits/stdc++.h>
 
 /*
 Vector operations
@@ -40,20 +41,21 @@ public:
     cudaFree(offset);
     cudaFree(colors);
     cudaFree(rand);
-    delete [] adj_matrix;
   };
-  SizeT &operator[] (SizeT);
-  void print_adj();
+//  SizeT &operator[] (SizeT); DEPRICATED
+//  void print_adj();
+  void print_tup();
   void print_arrays();
   void check_conflict();
-  unsigned int nodes;
+  unsigned int edges;
   unsigned int vertices;
   SizeT* csr;
   SizeT* offset;
   SizeT* colors;
   ValueT* rand;
 private:
-  SizeT* adj_matrix;
+  vector <tuple<SizeT,SizeT>> coo;
+//  SizeT* adj_matrix; DEPRICATED
 };
 
 // class outline (some functions taken from EEC289Q)
@@ -68,6 +70,8 @@ CSR<ValueT,SizeT>::CSR(const char filename[]) {
     return;
   }
 
+  cout << "Making adj matrix ..." << endl;
+
   while (getline(infile, line)) {
     istringstream iss(line);
     if (line.find("%") == string::npos)
@@ -77,27 +81,37 @@ CSR<ValueT,SizeT>::CSR(const char filename[]) {
   istringstream iss(line);
   SizeT num_rows, num_cols, num_edges;
   iss >> num_rows >> num_cols >> num_edges;
-  this->adj_matrix = new SizeT[num_rows * num_rows];
-  memset(this->adj_matrix, 0, num_rows * num_rows * sizeof(bool));
+
   this->vertices = num_rows;
+  this->edges = num_edges;
 
-  while (getline(infile, line)) {
-    istringstream iss(line);
-    SizeT node1, node2, weight;
-    iss >> node1 >> node2 >> weight;
+  cout << "Number of vertices: " << num_rows << endl;
+  cout << "Number of directed edges: " << num_edges << endl;
 
-    this->adj_matrix[(node1 - 1) * num_rows + (node2 - 1)] = 1;
-    this->adj_matrix[(node2 - 1) * num_rows + (node1 - 1)] = 1;
-  }
-  infile.close();
 
-  // declare csr and offset
-  int csr_length = thrust::reduce(thrust::host,
-    this->adj_matrix, this->adj_matrix + this->vertices * this->vertices);
+  /* vvvvvvvvv DEPRICATED CODE, ALLOC ERROR WHEN GRAPH IS LARGE vvvvvvvvvvvvvvvv
+  // this->adj_matrix = new SizeT[num_rows * num_rows];
+  // memset(this->adj_matrix, 0, num_rows * num_rows * sizeof(bool));
+  //
+  // while (getline(infile, line)) {
+  //   istringstream iss(line);
+  //   SizeT node1, node2, weight;
+  //   iss >> node1 >> node2 >> weight;
+  //
+  //   this->adj_matrix[(node1 - 1) * num_rows + (node2 - 1)] = true;
+  //   this->adj_matrix[(node2 - 1) * num_rows + (node1 - 1)] = true;
+  // }
+  // infile.close();
+  //
+  // cout << "Making csr and offset ..." << endl;
+  //
+  // // declare csr and offset
+  // int csr_length = thrust::reduce(thrust::host,
+  //   this->adj_matrix, this->adj_matrix + this->vertices * this->vertices);
 
-  cudaMallocManaged(&(this->csr), csr_length * sizeof(SizeT));
+  cudaMallocManaged(&(this->csr), this->edges * sizeof(SizeT));
   cudaMallocManaged(&(this->offset), this->vertices * sizeof(SizeT));
-  // this->csr = new SizeT[csr_length];
+  // this->csr = new SizeT[this->edges ];
   // this->offset = new SizeT[this->vertices];
 
   // populate csr and offset
@@ -115,18 +129,56 @@ CSR<ValueT,SizeT>::CSR(const char filename[]) {
   }
   thrust::exclusive_scan(thrust::host, this->offset,
     this->offset + this->vertices, this->offset);
+ ^^^^^^^^^^^^ DEPRICATED CODE, ALLOC ERROR WHEN GRAPH IS LARGE ^^^^^^^^^^^^^^^*/
 
+ cout << "Making coo ..." << endl;
+
+ while (getline(infile, line)) {
+   istringstream iss(line);
+   SizeT node1, node2, weight;
+   iss >> node1 >> node2 >> weight;
+   this->coo.push_back(make_tuple(node1 - 1, node2 - 1));
+   this->coo.push_back(make_tuple(node2 - 1, node1 - 1));
+ }
+ infile.close();
+
+ // erase redundant nodes
+ sort(this->coo.begin(), this->coo.end());
+ this->coo.erase(unique(this->coo.begin(), this->coo.end()), this->coo.end());
+
+ cout << "Making csr ..." << endl;
+
+ cudaMallocManaged(&(this->csr), this->coo.size() * sizeof(SizeT));
+ cudaMallocManaged(&(this->offset), this->vertices * sizeof(SizeT));
+
+ for (int i = 0; i < this->coo.size(); i++) {
+   this->csr[i] = get<1>(this->coo[i]);
+ }
+
+ for (SizeT v = 0; v < this->vertices; v++) {
+   int count = 0;
+   for (int i = 0; i < this->coo.size(); i++) {
+     if (get<0>(this->coo[i]) == v)
+      count ++;
+   }
+   this->offset[v] = count;
+ }
+
+  cout << "Making rand ..." << endl;
   // create rand array for IS
   cudaMallocManaged(&(this->rand), this->vertices * sizeof(ValueT));
   // this->rand = new ValueT[this->vertices];
   random_device rd;
   mt19937 e2(rd());
-  e2.seed(1);
+  e2.seed(SEED_NUM);
   uniform_real_distribution<> dist(0,100);
   for (int v = 0; v < this->vertices; v++) {
     this->rand[v] = dist(e2);
   }
+  thrust::exclusive_scan(thrust::host, this->offset,
+    this->offset + this->vertices, this->offset);
 
+  cout << "Making colors ..." << endl;
   // allocate memory for colors
   cudaMallocManaged(&(this->colors), this->vertices * sizeof(SizeT));
   // this->colors = new SizeT[this->vertices];
@@ -134,25 +186,36 @@ CSR<ValueT,SizeT>::CSR(const char filename[]) {
 };
 
 
-// index overload
-template <typename ValueT, typename SizeT>
-SizeT & CSR<ValueT,SizeT>::operator[](SizeT idx) {
-   return this->adj_matrix[idx];
-};
+// index overload DEPRICATED
+// template <typename ValueT, typename SizeT>
+// SizeT & CSR<ValueT,SizeT>::operator[](SizeT idx) {
+//    return this->adj_matrix[idx];
+// };
 
-// print first 20 x 20 entries for adj matrix
+// print first 20 x 20 entries for adj matrix  DEPRICATED
+// template <typename ValueT, typename SizeT>
+// void CSR<ValueT, SizeT>::print_adj() {
+//   SizeT max_idx = 20;
+//   if(this->vertices < 20)
+//     max_idx = this->vertices;
+//   for (int i = 0; i < max_idx; i++) {
+//     cout << i << " : [";
+//     for (int j = 0; j < max_idx; j++) {
+//       cout << this->adj_matrix[i * this->vertices + j] << ", ";
+//     }
+//     cout << "]" << endl;
+//   }
+// };
+
+// print first 20 tuples
 template <typename ValueT, typename SizeT>
-void CSR<ValueT, SizeT>::print_adj() {
-  SizeT max_idx = 20;
-  if(this->vertices < 20)
-    max_idx = this->vertices;
-  for (int i = 0; i < max_idx; i++) {
-    cout << i << " : [";
-    for (int j = 0; j < max_idx; j++) {
-      cout << this->adj_matrix[i * this->vertices + j] << ", ";
+void CSR<ValueT, SizeT>::print_tup() {
+    SizeT max_idx = 20;
+    if(this->vertices < 20)
+      max_idx = this->vertices;
+    for (int i = 0; i < max_idx; i++) {
+      cout << "(" << get<0>(this->coo[i]) << ", " << get<1>(this->coo[i]) << ")" <<endl;
     }
-    cout << "]" << endl;
-  }
 };
 
 // print first 20 entries for offset and csr
@@ -291,15 +354,13 @@ IS Kernel Driver
 Tester - version 1
 ==============================================================================*/
 template <typename ValueT, typename SizeT>
-void test_1(bool small) {
-
-  CSR <float, int>  graph = CSR<float, int>("/data-2/topc-datasets/gc-data/offshore/offshore.mtx");
-  if (small) {
-    CSR <float, int> graph = CSR<float, int>("../gunrock/dataset/small/test_cc.mtx"); }
+void test_1(CSR <float, int> graph) {
 
   int iteration = 0;
   unsigned int num_threads = 32;
   unsigned int num_blocks = graph.vertices / num_threads + 1;
+
+  cout << "Kernel loop start" << endl;
 
   while (stop_condition<float, int>(graph.colors, graph.vertices)) {
       color_op<float, int><<<num_blocks, num_threads>>>
@@ -313,7 +374,9 @@ void test_1(bool small) {
        iteration ++;
   }
 
-  graph.print_adj();
+  // graph.print_adj(); DEPRICATED
+  cout << "==== Graph Samples: ====" <<endl;
+  graph.print_tup();
   graph.print_arrays();
   graph.check_conflict();
 };
@@ -324,11 +387,14 @@ Main function
 
 int main(int argc, char const *argv[]) {
 #if defined(VERSION) && VERSION == 1
-  cout << "Test small graph" << endl;
-  test_1 <float, int> (true);
+  // cout << "Test small graph" << endl;
+  // CSR <float, int> * graph = new CSR<float, int>("../gunrock/dataset/small/test_cc.mtx");
+  // test_1 <float, int> (*graph);
 
   cout << "Test large graph" << endl;
-  test_1 <float, int> (false);
+  CSR <float, int> * graph = new CSR<float, int>("/data-2/topc-datasets/gc-data/offshore/offshore.mtx");
+  test_1 <float, int> (*graph);
+
 #endif
   return 0;
 }
